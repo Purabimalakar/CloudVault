@@ -3,7 +3,6 @@ import bcrypt from "bcryptjs";
 import { CloudUser, S3FileItem } from "@/types/file";
 import { formatBytes } from "./utils";
 
-const uri = process.env.MONGODB_URI;
 const DB_NAME = "cloudvault";
 const DEFAULT_ADMIN_USERNAME = "admin";
 const DEFAULT_ADMIN_PASSWORD = process.env.ADMIN_DEFAULT_PASSWORD || "Adamas@2023";
@@ -12,24 +11,46 @@ declare global {
   var _mongoClientPromise: Promise<MongoClient> | undefined;
 }
 
-let clientPromise: Promise<MongoClient>;
+let clientPromise: Promise<MongoClient> | undefined;
 
-if (process.env.NODE_ENV === "development") {
-  if (!global._mongoClientPromise) {
-    const client = new MongoClient(uri);
-    global._mongoClientPromise = client.connect();
-  }
-  clientPromise = global._mongoClientPromise;
-} else {
+function connectClient(uri: string, onReset: () => void): Promise<MongoClient> {
   const client = new MongoClient(uri);
-  clientPromise = client.connect();
+  return client.connect().catch((err) => {
+    onReset();
+    throw err;
+  });
+}
+
+function getClientPromise(): Promise<MongoClient> {
+  const uri = process.env.MONGODB_URI?.trim();
+  if (!uri) {
+    throw new Error(
+      "MONGODB_URI environment variable is not defined. Please configure it in .env."
+    );
+  }
+
+  if (process.env.NODE_ENV === "development") {
+    if (!global._mongoClientPromise) {
+      global._mongoClientPromise = connectClient(uri, () => {
+        global._mongoClientPromise = undefined;
+      });
+    }
+    return global._mongoClientPromise;
+  }
+
+  if (!clientPromise) {
+    clientPromise = connectClient(uri, () => {
+      clientPromise = undefined;
+    });
+  }
+  return clientPromise;
 }
 
 /**
  * Returns the MongoDB Database instance.
  */
 export async function getDb(): Promise<Db> {
-  const client = await clientPromise;
+  const client = await getClientPromise();
   return client.db(DB_NAME);
 }
 
